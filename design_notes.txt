@@ -3,48 +3,110 @@ Design Notes
 
 Author: Mark Schulze
 
-Overview
+OVERVIEW
 
 This solution uses a multi-agent architecture to automate business operations related to quoting, inventory management, supplier coordination, financial validation, and order fulfillment.
 
-The system was designed to separate responsibilities across specialized agents while maintaining clear business controls and transactional accuracy.
+The system was designed to separate responsibilities across specialized agents while maintaining clear business controls, inventory accuracy, and financial accountability.
 
-Architecture
+The architecture follows an orchestration pattern where a central orchestrator coordinates specialized worker agents responsible for quoting, inventory management, and order processing.
 
-The solution consists of two primary agents:
+ARCHITECTURE
+
+The solution consists of three primary agents:
 
 1. Quote Agent
-2. Ordering Agent
+2. Inventory Management Agent
+3. Ordering Agent
+
+The system also includes an orchestrator function (call_multi_agent_system) that coordinates communication and workflow execution between agents.
+
+Orchestrator Responsibilities
+
+- Receive customer requests
+- Coordinate quote generation
+- Coordinate inventory validation
+- Route information between agents
+- Manage end-to-end workflow execution
+- Return final customer responses
 
 Quote Agent Responsibilities
 
-- Searches historical quote records
-- References prior customer requests and quote explanations
-- Estimates pricing for requested products
-- Identifies supported and unsupported products
-- Uses catalog pricing and discount logic
-- Provides preliminary pricing information
+- Search historical quote records
+- Reference prior customer requests and quote explanations
+- Estimate pricing for requested products
+- Identify supported and unsupported products
+- Use catalog pricing and discount logic
+- Provide preliminary pricing information
+
+Inventory Management Agent Responsibilities
+
+- Check current inventory levels
+- Evaluate inventory availability
+- Calculate supplier lead times
+- Check cash availability
+- Generate company financial reports
+- Support order validation decisions
 
 Ordering Agent Responsibilities
 
-- Processes complete customer requests
-- Extracts products, quantities, request dates, and delivery dates
-- Validates inventory availability
-- Validates supplier lead times
-- Validates cash availability
-- Creates replenishment transactions when necessary
-- Creates sales transactions
-- Returns fulfilled or rejected order decisions
+- Process complete customer requests
+- Extract products, quantities, request dates, and delivery dates
+- Validate inventory availability
+- Validate supplier lead times
+- Validate cash availability
+- Create replenishment transactions when necessary
+- Create sales transactions
+- Finalize customer orders
+- Return fulfilled or rejected order decisions
 
-Business Rules
+TOOLS AND HELPER FUNCTIONS
+
+Quote Agent Tools
+
+- search_historical_quotes()
+  - Uses: search_quote_history()
+
+- estimate_quote()
+  - Uses: catalog pricing, alias resolution, and discount logic
+
+Inventory Management Agent Tools
+
+- check_inventory()
+  - Uses: get_stock_level()
+
+- check_all_inventory()
+  - Uses: get_all_inventory()
+
+- check_supplier_timeline()
+  - Uses: get_supplier_delivery_date()
+
+- check_available_cash()
+  - Uses: get_cash_balance()
+
+- get_company_report()
+  - Uses: generate_financial_report()
+
+Ordering Agent Tools
+
+- process_complete_order()
+  - Uses:
+    - create_transaction()
+    - get_all_inventory()
+    - get_stock_level()
+    - get_supplier_delivery_date()
+    - get_cash_balance()
+    - generate_financial_report()
+
+BUSINESS RULES
 
 Inventory Validation
 
 Inventory is evaluated using transaction history rather than static inventory values.
 
-Available inventory is calculated by:
+Available inventory is calculated using:
 
-Stock Orders - Sales = Available Inventory
+Stock Orders – Sales = Available Inventory
 
 Inventory checks are performed using the required delivery date to account for previously scheduled replenishment and fulfillment transactions.
 
@@ -57,19 +119,21 @@ Supplier lead times are determined by requested quantity:
 - 101–1000 units: 4 days
 - More than 1000 units: 7 days
 
-Orders are rejected when required replenishment cannot arrive before the requested delivery date.
+Orders are automatically rejected when required replenishment inventory cannot arrive before the customer delivery deadline.
 
 Financial Validation
 
-Before creating replenishment orders, the system validates that sufficient cash exists to cover all required restocking costs.
+Before creating replenishment orders, the system validates that sufficient cash exists to cover all required inventory purchases.
 
-Orders are rejected when required replenishment exceeds available cash.
+Orders are rejected when replenishment costs exceed available cash.
 
-Product Resolution
+This prevents the company from creating inventory obligations that cannot be funded.
+
+PRODUCT RESOLUTION
 
 Customers frequently use terminology that differs from catalog product names.
 
-The solution uses a normalization and alias resolution layer to map customer language to catalog products.
+The solution implements normalization and alias resolution logic to map customer language to supported catalog products.
 
 Examples:
 
@@ -78,30 +142,32 @@ Examples:
 - "colorful cardstock" → "Cardstock"
 - "A4 matte paper" → "Matte paper"
 
-This improves order accuracy and reduces transaction failures.
+This improves order accuracy and reduces transaction failures caused by inconsistent terminology.
 
-Discount Logic
+DISCOUNT LOGIC
 
-Bulk discounts are applied using deterministic thresholds.
+Bulk discounts are applied using deterministic quantity thresholds.
 
-Discount Tiers:
+Discount Tiers
 
 - 500+ units: 5%
 - 1000+ units: 10%
 - 5000+ units: 12%
 - 10000+ units: 15%
 
-Order Fulfillment Strategy
+This ensures consistent and explainable quote and fulfillment pricing.
+
+ORDER FULFILLMENT STRATEGY
 
 Orders are processed as complete transactions.
 
-The system does not partially fulfill orders.
+The solution does not partially fulfill customer orders.
 
-If any item cannot be supported, supplied on time, or financed, the entire order is rejected.
+If any product is unsupported, unavailable within the required timeline, or unaffordable due to financial constraints, the entire order is rejected.
 
 This approach preserves business consistency and prevents incomplete customer deliveries.
 
-Data Sources
+DATA SOURCES
 
 The system uses:
 
@@ -109,35 +175,85 @@ The system uses:
 - Historical quote records
 - Inventory reference data
 - Transaction history
-- Supplier lead-time logic
+- Supplier lead-time calculations
+- Customer order requests
 
-Technologies
+TECHNOLOGIES
 
 - Python
 - SQLite
 - Pandas
 - SQLAlchemy
 - Smolagents
-- OpenAI-compatible language models
+- OpenAI-Compatible Language Models
 
-Key Design Decisions
+KEY DESIGN DECISIONS
 
 1. Separate quote generation from fulfillment decision-making.
-2. Validate inventory using delivery dates rather than request dates.
-3. Use transaction history as the inventory source of truth.
-4. Reject unsupported products rather than attempting substitutions.
-5. Reject incomplete orders rather than allowing partial fulfillment.
-6. Apply deterministic pricing and discount logic for consistency.
-7. Maintain financial controls before creating replenishment orders.
 
-Results
+2. Use specialized agents with clearly defined responsibilities.
+
+3. Validate inventory using delivery dates rather than request dates.
+
+4. Use transaction history as the inventory source of truth.
+
+5. Reject unsupported products rather than attempting substitutions.
+
+6. Reject incomplete orders rather than allowing partial fulfillment.
+
+7. Apply deterministic pricing and discount logic for consistency and transparency.
+
+8. Maintain financial controls before creating replenishment orders.
+
+9. Use supplier lead-time validation to ensure realistic delivery commitments.
+
+10. Preserve transactional integrity through structured sales and replenishment records.
+
+EVALUATION RESULTS
+
+The solution was evaluated using the complete set of requests provided in quote_requests_sample.csv.
+
+The evaluation demonstrated that:
+
+- Multiple customer requests were successfully fulfilled.
+- Inventory replenishment transactions were created when stock shortages occurred.
+- Cash balances changed during simulation as inventory purchases and sales transactions were processed.
+- Supplier lead-time validation prevented unrealistic delivery commitments.
+- Multiple customer requests were rejected when inventory or supplier constraints could not be satisfied.
+- The system consistently enforced inventory, supplier, and financial controls before fulfilling orders.
+
+STRENGTHS
+
+- Clear separation of responsibilities between agents.
+- Accurate inventory calculations using transaction history.
+- Strong supplier validation logic.
+- Financial guardrails that prevent unaffordable replenishment.
+- Flexible product alias resolution.
+- Consistent order processing and decision logic.
+- Explainable business rules and pricing decisions.
+
+FUTURE IMPROVEMENTS
+
+1. Add demand forecasting and predictive inventory planning to proactively replenish stock before shortages occur.
+
+2. Introduce a dedicated Procurement Agent responsible for supplier selection, supplier ranking, and supplier performance management.
+
+3. Add customer-facing order status tracking and shipment notifications.
+
+4. Create operational dashboards for inventory, sales, fulfillment rates, and financial reporting.
+
+5. Expand the architecture with additional agents focused on forecasting, procurement, and customer service.
+
+RESULTS
 
 The final solution successfully demonstrates:
 
 - Multi-agent orchestration
 - Tool-based reasoning
+- Historical knowledge retrieval
 - Inventory management
 - Financial validation
 - Supplier coordination
 - Transactional order processing
 - Business workflow automation
+- End-to-end order fulfillment decisioning
