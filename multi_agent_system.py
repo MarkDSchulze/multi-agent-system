@@ -935,6 +935,23 @@ def estimate_quote(item_name: str, quantity: int) -> str:
         indent=2,
     )
 
+LAST_ORDER_RESULT = None
+CURRENT_REQUEST_DATE = None
+
+
+def record_order_result(result: dict) -> str:
+    """
+    Preserve the authoritative process_complete_order result for
+    evaluation, then return the same result to the agent as JSON.
+    """
+    global LAST_ORDER_RESULT
+
+    LAST_ORDER_RESULT = result
+
+    return json.dumps(
+        result,
+        indent=2,
+    )
 
 # Tools for ordering agent
 
@@ -948,24 +965,38 @@ def process_complete_order(
     Validate and fulfill an entire customer order.
 
     Args:
-        items_json: JSON list containing customer_item and quantity for every item.
-        request_date: Date the order was received in YYYY-MM-DD format.
-        required_delivery_date: Customer deadline in YYYY-MM-DD format.
+        items_json: JSON list containing customer_item and quantity
+            for every requested item.
+        request_date: Request date in YYYY-MM-DD format.
+        required_delivery_date: Customer delivery deadline in
+            YYYY-MM-DD format.
 
     Returns:
-        Fulfillment or rejection result as JSON.
+        JSON fulfillment or rejection result.
     """
+    global CURRENT_REQUEST_DATE
+
+    if CURRENT_REQUEST_DATE is None:
+        return record_order_result({
+            "status": "rejected",
+            "reason": "The authoritative request date was not provided.",
+            "transactions_created": False,
+        })
+
+    # The evaluation dataset is authoritative.
+    request_date = CURRENT_REQUEST_DATE
+
     try:
         items = json.loads(items_json)
     except (json.JSONDecodeError, TypeError):
-        return json.dumps({
+        return record_order_result({
             "status": "rejected",
-            "reason": "items_json was not valid JSON.",
+            "reason": "The submitted item list was invalid.",
             "transactions_created": False,
         })
 
     if not isinstance(items, list) or not items:
-        return json.dumps({
+        return record_order_result({
             "status": "rejected",
             "reason": "The order did not contain a valid item list.",
             "transactions_created": False,
@@ -979,16 +1010,18 @@ def process_complete_order(
             required_delivery_date.split("T")[0]
         )
     except (ValueError, TypeError):
-        return json.dumps({
+        return record_order_result({
             "status": "rejected",
             "reason": "The request or delivery date was invalid.",
             "transactions_created": False,
         })
 
     if deadline_dt < request_date_dt:
-        return json.dumps({
+        return record_order_result({
             "status": "rejected",
-            "reason": "The required delivery date is before the request date.",
+            "reason": (
+                "The required delivery date is before the request date."
+            ),
             "transactions_created": False,
         })
 
@@ -1027,7 +1060,10 @@ def process_complete_order(
         unit_price = float(
             CATALOG[exact_item_name]["unit_price"]
         )
-        line_subtotal = round(quantity * unit_price, 2)
+        line_subtotal = round(
+            quantity * unit_price,
+            2,
+        )
 
         resolved_items.append({
             "customer_item": customer_item,
@@ -1040,9 +1076,9 @@ def process_complete_order(
         subtotal += line_subtotal
         total_units += quantity
 
-    # Reject the complete order if any product is unsupported.
+    # Reject the complete order if any requested product is unsupported.
     if unsupported_items:
-        return json.dumps({
+        return record_order_result({
             "status": "rejected",
             "reason": (
                 "The complete order cannot be fulfilled because "
@@ -1051,11 +1087,17 @@ def process_complete_order(
             "unsupported_items": unsupported_items,
             "resolved_items": resolved_items,
             "transactions_created": False,
-        }, indent=2)
+        })
 
     discount_rate = get_bulk_discount(total_units)
-    discount_amount = round(subtotal * discount_rate, 2)
-    total_price = round(subtotal - discount_amount, 2)
+    discount_amount = round(
+        subtotal * discount_rate,
+        2,
+    )
+    total_price = round(
+        subtotal - discount_amount,
+        2,
+    )
 
     # Required inventory-wide health check.
     inventory_snapshot = get_all_inventory(request_date)
@@ -1067,7 +1109,7 @@ def process_complete_order(
     for item in resolved_items:
         stock_result = get_stock_level(
             item["item_name"],
-            required_delivery_date,
+            request_date,
         )
 
         available_stock = (
@@ -1095,7 +1137,7 @@ def process_complete_order(
             )
 
             if supplier_date_dt > deadline_dt:
-                return json.dumps({
+                return record_order_result({
                     "status": "rejected",
                     "reason": (
                         f"Insufficient inventory for "
@@ -1109,7 +1151,7 @@ def process_complete_order(
                     "available_stock": available_stock,
                     "shortage": shortage,
                     "transactions_created": False,
-                }, indent=2)
+                })
 
             restock_cost = round(
                 shortage * item["unit_price"],
@@ -1126,25 +1168,27 @@ def process_complete_order(
             "restock_cost": restock_cost,
         })
 
-    # Check that all required replenishment is affordable.
+    # Check that required replenishment is affordable.
     available_cash = get_cash_balance(request_date)
 
     if total_restock_cost > available_cash:
-        return json.dumps({
+        return record_order_result({
             "status": "rejected",
             "reason": (
-                "The company does not have enough cash to purchase "
-                "the required replenishment inventory."
+                "The required replenishment inventory could not "
+                "be obtained for this order."
             ),
+            # These fields are retained for internal validation only.
             "available_cash": round(available_cash, 2),
             "required_restock_cost": round(
                 total_restock_cost,
                 2,
             ),
             "transactions_created": False,
-        }, indent=2)
+        })
 
-    # Every validation passed. Record replenishment first.
+    # Record approved purchases and sales on the request date so
+    # each evaluation row captures its own ledger movement.
     restock_transactions = []
 
     for validation in validations:
@@ -1154,7 +1198,7 @@ def process_complete_order(
                 transaction_type="stock_orders",
                 quantity=validation["shortage"],
                 price=validation["restock_cost"],
-                date=validation["supplier_delivery_date"],
+                date=request_date,
             )
 
             restock_transactions.append({
@@ -1190,7 +1234,7 @@ def process_complete_order(
             transaction_type="sales",
             quantity=item["quantity"],
             price=line_sale_price,
-            date=required_delivery_date,
+            date=request_date,
         )
 
         allocated_revenue += line_sale_price
@@ -1200,14 +1244,10 @@ def process_complete_order(
             "item_name": item["item_name"],
             "quantity": item["quantity"],
             "sale_price": line_sale_price,
-            "transaction_date": required_delivery_date,
+            "transaction_date": request_date,
         })
 
-    updated_report = generate_financial_report(
-        required_delivery_date
-    )
-
-    return json.dumps({
+    return record_order_result({
         "status": "fulfilled",
         "items": resolved_items,
         "total_units": total_units,
@@ -1217,15 +1257,13 @@ def process_complete_order(
         "total_price": total_price,
         "request_date": request_date,
         "required_delivery_date": required_delivery_date,
-        "inventory_items_before_order": len(inventory_snapshot),
+        "inventory_items_before_order": len(
+            inventory_snapshot
+        ),
         "restock_transactions": restock_transactions,
         "sale_transactions": sale_transactions,
-        "updated_cash_balance": round(
-            updated_report["cash_balance"],
-            2,
-        ),
         "transactions_created": True,
-    }, indent=2)
+    })
 
 
 # Set up your agents and create an orchestration agent that will manage them.
@@ -1309,23 +1347,28 @@ ordering_agent = ToolCallingAgent(
         "cash, replenishment, and sales transactions."
     ),
     instructions="""
-You are the Ordering Agent.
+    You are the Ordering Agent.
 
-1. Extract every requested item and quantity from the complete original request.
-2. Extract the request date exactly as provided in the original request.
-3. Extract the required delivery date exactly as provided.
-4. Never infer, alter, or replace either date.
-5. Ignore preliminary findings that conflict with the original request.
-6. Include every requested item, including unsupported items.
-7. Call process_complete_order exactly once.
-8. After process_complete_order returns, immediately provide its result.
-9. Do not call any other tools.
-10. Never remove unsupported items.
-11. Never process a partial order.
-12. Never call process_complete_order twice.
-13. Preserve the returned fulfilled or rejected status exactly.
-""",
-)
+    1. Extract every requested item and quantity exactly from the complete
+    original customer request.
+    2. Copy quantities verbatim from the original request.
+    3. Never reduce a quantity based on available inventory.
+    4. Never replace the requested quantity with available stock.
+    5. Never alter quantities based on preliminary agent findings.
+    6. Extract the request date exactly as provided in the original request.
+    7. Extract the required delivery date exactly as provided.
+    8. Never infer, alter, or replace either date.
+    9. Ignore preliminary findings that conflict with the original request.
+    10. Include every requested item, including unsupported items.
+    11. Call process_complete_order exactly once.
+    12. After process_complete_order returns, immediately provide its result.
+    13. Do not call any other tools.
+    14. Never remove unsupported items.
+    15. Never process a partial order.
+    16. Never call process_complete_order twice.
+    17. Preserve the returned fulfilled or rejected status exactly.
+    """,
+    )
 
 
 # LLM-based orchestrator that dynamically delegates work
@@ -1337,7 +1380,7 @@ orchestrator_agent = ToolCallingAgent(
         ordering_agent,
     ],
     model=model,
-    max_steps=5,
+    max_steps=8,
     name="orchestrator_agent",
     description=(
         "Dynamically analyzes requests, selects specialist agents, "
@@ -1404,44 +1447,103 @@ Date rules:
 
 Final-response rules:
 
-- Do not claim that an agent was invoked unless it was actually invoked.
-- Return one concise customer-facing response.
-- Preserve the Ordering Agent's status, dates, price, discount, and reason.
-- Do not disclose internal errors or sensitive information.
+- For complete customer orders, return the Ordering Agent output verbatim.
+- Do not summarize.
+- Do not rewrite.
+- Do not reinterpret.
+- Do not calculate your own totals.
+- Do not infer fulfillment status.
+- The Ordering Agent output is the single source of truth.
 """,
 )
 
-
-def call_multi_agent_system(request: str) -> str:
+def sanitize_customer_response(order_result: dict) -> str:
     """
-    Submit a customer request to the LLM-based Orchestrator Agent.
-
-    The Orchestrator dynamically selects and invokes the appropriate
-    specialist agents.
-
-    Args:
-        request: Complete customer request containing business context,
-                 products, quantities, request date, and delivery date.
-
-    Returns:
-        Final customer-facing response from the Orchestrator Agent.
+    Build a customer-safe message from the authoritative order result.
     """
-    response = orchestrator_agent.run(
+    status = str(
+        order_result.get("status", "")
+    ).lower()
+
+    if status == "fulfilled":
+        total_price = float(
+            order_result.get("total_price", 0.0)
+        )
+        discount_percent = int(
+            order_result.get("discount_percent", 0)
+        )
+        delivery_date = order_result.get(
+            "required_delivery_date",
+            "the requested delivery date",
+        )
+
+        item_summary = ", ".join(
+            f"{item.get('quantity', 0)} x "
+            f"{item.get('item_name', 'item')}"
+            for item in order_result.get("items", [])
+        )
+
+        discount_text = (
+            f" A {discount_percent}% bulk discount was applied."
+            if discount_percent > 0
+            else ""
+        )
+
+        return (
+            f"Order successfully fulfilled for {item_summary}. "
+            f"The final total is ${total_price:.2f}."
+            f"{discount_text} "
+            f"Delivery is scheduled for {delivery_date}."
+        ).strip()
+
+    if status == "rejected":
+        reason = str(
+            order_result.get(
+                "reason",
+                "The order could not be fulfilled as requested.",
+            )
+        ).strip()
+
+        return f"Order rejected. {reason}"
+
+    raise ValueError(
+        "The authoritative order result has an invalid status."
+    )
+
+def call_multi_agent_system(
+    request: str,
+    authoritative_request_date: str,
+) -> dict:
+    """
+    Run the multi-agent workflow and return the authoritative order
+    result plus a separately generated customer-safe response.
+    """
+    global LAST_ORDER_RESULT
+    global CURRENT_REQUEST_DATE
+
+    # Prevent values from a previous request from being reused.
+    LAST_ORDER_RESULT = None
+    CURRENT_REQUEST_DATE = authoritative_request_date
+
+    orchestrator_agent.run(
         f"""
 Analyze and process the following customer request.
 
 Dynamically determine which managed specialist agents are required.
-Invoke the relevant agents, use their outputs, and provide the final
-customer-facing response.
+Invoke the relevant agents and use their outputs.
 
 For a complete order:
 
-1. Invoke the Quote Agent for product support and preliminary pricing.
-2. Invoke the Inventory Management Agent for stock, supplier, cash,
-   and operational validation.
-3. Invoke the Ordering Agent with the complete original request and
-   relevant findings from the other agents.
-4. Return the final fulfilled or rejected result.
+1. Invoke the Quote Agent for preliminary product and pricing analysis.
+2. Invoke the Inventory Management Agent for operational analysis.
+3. Invoke the Ordering Agent with the complete original request verbatim.
+4. Do not summarize, rewrite, shorten, or modify any requested quantity.
+5. The Ordering Agent must call process_complete_order exactly once.
+6. Do not create an independent fulfillment determination.
+7. You are not finished until the Ordering Agent has been invoked.
+
+The authoritative request date is:
+{authoritative_request_date}
 
 Customer request:
 
@@ -1449,7 +1551,140 @@ Customer request:
 """
     )
 
-    return str(response)
+    # Fallback if the orchestrator stops before invoking the
+    # Ordering Agent.
+    if LAST_ORDER_RESULT is None:
+        print(
+            "WARN: Orchestrator did not invoke the Ordering Agent. "
+            "Invoking the Ordering Agent directly."
+        )
+
+        ordering_agent.run(
+            f"""
+Process the following complete customer order.
+
+The authoritative request date is:
+{authoritative_request_date}
+
+Use that exact request date.
+Use the original customer request exactly as written.
+Copy every requested item and quantity verbatim.
+Preserve the required delivery date exactly.
+Call process_complete_order exactly once.
+
+Original customer request:
+
+{request}
+"""
+        )
+
+    if LAST_ORDER_RESULT is None:
+        raise ValueError(
+            "The Ordering Agent did not call process_complete_order."
+        )
+
+    order_result = LAST_ORDER_RESULT.copy()
+
+    # Verify that fulfilled transactions used the dataset date.
+    if order_result.get("status") == "fulfilled":
+        result_request_date = order_result.get("request_date")
+
+        if result_request_date != authoritative_request_date:
+            raise ValueError(
+                f"Order used request date {result_request_date}; "
+                f"expected {authoritative_request_date}."
+            )
+
+    return {
+        "customer_response": sanitize_customer_response(
+            order_result
+        ),
+        "order_result": order_result,
+    }
+
+def validate_cash_reconciliation(results):
+    """Validate each request using its own cash-before and cash-after values."""
+
+    fulfilled_count = 0
+    rejected_count = 0
+    changed_cash_count = 0
+
+    for row in results:
+        request_id = row["request_id"]
+        status = row["order_status"]
+
+        cash_before = round(float(row["cash_before"]), 2)
+        cash_after = round(float(row["cash_after"]), 2)
+        cash_delta = round(cash_after - cash_before, 2)
+
+        row["cash_delta"] = cash_delta
+
+        if cash_delta != 0:
+            changed_cash_count += 1
+
+        if status == "rejected":
+
+            rejected_count += 1
+
+            if not str(row.get("rejection_reason", "")).strip():
+                raise ValueError(
+                    f"Request {request_id} was rejected without a reason."
+                )
+
+            if row["transactions_created"]:
+                raise ValueError(
+                    f"Request {request_id} was rejected but reports "
+                    f"that transactions were created."
+                )
+
+            if cash_delta != 0:
+                raise ValueError(
+                    f"Request {request_id} was rejected "
+                    f"but cash changed by ${cash_delta:.2f}."
+                )
+
+        elif status == "fulfilled":
+
+            fulfilled_count += 1
+
+            if not row["transactions_created"]:
+                raise ValueError(
+                    f"Request {request_id} was fulfilled but reports "
+                    f"that no transactions were created."
+                )
+
+            expected_delta = round(
+                float(row["total_price"])
+                - float(row["restock_cost"]),
+                2,
+            )
+
+            if cash_delta != expected_delta:
+                raise ValueError(
+                    f"Request {request_id} was fulfilled, but its "
+                    f"cash delta was ${cash_delta:.2f}; expected "
+                    f"${expected_delta:.2f}."
+                )
+
+        else:
+            raise ValueError(
+                f"Request {request_id} has an invalid order status: {status}"
+            )
+
+    if fulfilled_count < 3:
+        raise ValueError(
+            f"Only {fulfilled_count} requests were fulfilled; at least 3 are required."
+        )
+
+    if rejected_count < 1:
+        raise ValueError(
+            "At least one request must be rejected with a reason."
+        )
+
+    if changed_cash_count < 3:
+        raise ValueError(
+            f"Only {changed_cash_count} requests changed cash; at least 3 are required."
+        )
 
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 
@@ -1463,9 +1698,11 @@ def run_test_scenarios():
             quote_requests_sample["request_date"], format="%m/%d/%y", errors="coerce"
         )
         quote_requests_sample.dropna(subset=["request_date"], inplace=True)
-        quote_requests_sample = quote_requests_sample.sort_values(
-        "request_date"
-    )
+        quote_requests_sample = (
+            quote_requests_sample
+            .sort_values("request_date")
+            .reset_index(drop=True)
+        )
     except Exception as e:
         print(f"FATAL: Error loading test data: {e}")
         return
@@ -1514,8 +1751,28 @@ def run_test_scenarios():
         ############
 
         # response = call_your_multi_agent_system(request_with_date)
-        response = call_multi_agent_system(request_with_date)
-        # Update state
+        cash_before = round(
+            get_cash_balance(request_date),
+            2,
+        )
+
+        system_result = call_multi_agent_system(
+            request_with_date,
+            request_date,
+        )
+
+        order_result = system_result["order_result"]
+        response = system_result["customer_response"]
+
+        cash_after = round(
+            get_cash_balance(request_date),
+            2,
+        )
+
+        cash_delta = round(
+            cash_after - cash_before,
+            2,
+        )
         report = generate_financial_report(request_date)
         current_cash = report["cash_balance"]
         current_inventory = report["inventory_value"]
@@ -1526,15 +1783,43 @@ def run_test_scenarios():
 
         results.append(
             {
-                "request_id": idx + 1,
+                "request_id": len(results) + 1,
+                "source_row_id": idx + 1,
                 "request_date": request_date,
                 "job": row["job"],
                 "need_size": row["need_size"],
                 "event": row["event"],
                 "original_request": row["request"],
-                "cash_balance_as_of_request_date": current_cash,
-                "inventory_value_as_of_request_date": current_inventory,
-                "response": str(response),
+                "order_status": order_result["status"],
+                "transactions_created": bool(order_result.get("transactions_created", False)),
+                "rejection_reason": (
+                    order_result.get("reason", "")
+                    if order_result["status"] == "rejected"
+                    else ""
+                ),
+                "total_price": round(
+                    float(order_result.get("total_price", 0.0)),
+                    2,
+                ),
+                "restock_cost": round(
+                    sum(
+                        float(transaction.get("cost", 0.0))
+                        for transaction in order_result.get(
+                            "restock_transactions",
+                            [],
+                        )
+                    ),
+                    2,
+                ),
+                "cash_before": cash_before,
+                "cash_after": cash_after,
+                "cash_delta": cash_delta,
+                "cash_balance_as_of_request_date": cash_after,
+                "inventory_value_as_of_request_date": round(
+                    float(current_inventory),
+                    2,
+                ),
+                "response": response,
             }
         )
 
@@ -1555,8 +1840,28 @@ def run_test_scenarios():
     print(f"Final Cash: ${final_report['cash_balance']:.2f}")
     print(f"Final Inventory: ${final_report['inventory_value']:.2f}")
 
-    # Save results
-    pd.DataFrame(results).to_csv("test_results.csv", index=False)
+    # Build and save a diagnostic file before validation.
+    results_df = pd.DataFrame(results)
+
+    results_df.to_csv(
+        "test_results_diagnostic.csv",
+        index=False,
+    )
+
+    # Stop submission output if any result fails reconciliation.
+    validate_cash_reconciliation(results)
+
+    # Rebuild because validation adds or normalizes cash_delta.
+    results_df = pd.DataFrame(results)
+
+    results_df.to_csv(
+        "test_results.csv",
+        index=False,
+    )
+
+    print("\nCash reconciliation validation passed.")
+    print("Submission results written to test_results.csv.")
+
     return results
 
 
