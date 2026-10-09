@@ -1238,6 +1238,33 @@ inventory_agent = ToolCallingAgent(
         get_company_report,
     ],
     model=model,
+    max_steps=3,
+    name="inventory_management_agent",
+    description=(
+        "Handles inventory validation, supplier lead times, "
+        "available cash, and company financial information."
+    ),
+    instructions="""
+You are the Inventory Management Agent.
+
+Your responsibilities are limited to inventory, supplier, cash,
+and financial validation.
+
+For each assigned request:
+
+1. Review the complete customer request, quantities, and dates.
+2. Use check_all_inventory to obtain the inventory snapshot for the request date.
+3. Use check_inventory when the exact catalog item name is available.
+4. Use check_supplier_timeline when a shortage may require restocking.
+5. Use check_available_cash to evaluate replenishment affordability.
+6. Use get_company_report when broader financial information is needed.
+7. Return inventory findings only.
+8. Report stock levels, shortages, supplier timelines, and cash availability.
+9. Do not determine whether an order should be fulfilled or rejected.
+10. Do not create sales transactions.
+11. Do not calculate final pricing.
+12. The Ordering Agent and process_complete_order tool are the authoritative source for fulfillment decisions.
+""",
 )
 
 quote_agent = ToolCallingAgent(
@@ -1249,8 +1276,8 @@ quote_agent = ToolCallingAgent(
     max_steps=3,
     name="quote_agent",
     description=(
-        "Uses historical quotes and catalog prices to analyze "
-        "customer orders."
+    "Handles quote analysis, pricing, historical quote retrieval, "
+    "and supported product identification."
     ),
     instructions="""
 You are the Munder Difflin Quoting Agent.
@@ -1277,75 +1304,153 @@ ordering_agent = ToolCallingAgent(
     max_steps=2,
     name="ordering_agent",
     description=(
-        "Validates inventory, supplier timing, cash, and fulfills "
-        "or rejects complete customer orders."
+        "Finalizes complete customer orders using authoritative business "
+        "rules for product support, pricing, inventory, supplier timing, "
+        "cash, replenishment, and sales transactions."
     ),
     instructions="""
-    1. Extract every requested item and quantity.
-    2. Call process_complete_order exactly once.
-    3. Include every item exactly as requested.
-    4. After the tool responds, immediately call final_answer.
-    5. Never call process_complete_order twice.
-    6. Never remove unsupported items.
-    7. Never fulfill a partial order.
-    8. Preserve the tool's status exactly.
-    """
-    )
+You are the Ordering Agent.
+
+1. Extract every requested item and quantity from the complete original request.
+2. Extract the request date exactly as provided in the original request.
+3. Extract the required delivery date exactly as provided.
+4. Never infer, alter, or replace either date.
+5. Ignore preliminary findings that conflict with the original request.
+6. Include every requested item, including unsupported items.
+7. Call process_complete_order exactly once.
+8. After process_complete_order returns, immediately provide its result.
+9. Do not call any other tools.
+10. Never remove unsupported items.
+11. Never process a partial order.
+12. Never call process_complete_order twice.
+13. Preserve the returned fulfilled or rejected status exactly.
+""",
+)
+
+
+# LLM-based orchestrator that dynamically delegates work
+orchestrator_agent = ToolCallingAgent(
+    tools=[],
+    managed_agents=[
+        quote_agent,
+        inventory_agent,
+        ordering_agent,
+    ],
+    model=model,
+    max_steps=5,
+    name="orchestrator_agent",
+    description=(
+        "Dynamically analyzes requests, selects specialist agents, "
+        "delegates tasks, evaluates their outputs, and creates the "
+        "final customer-facing response."
+    ),
+    instructions="""
+You are the LLM-based Orchestrator Agent.
+
+You must dynamically decide which specialist agents are needed for each
+request. Do not perform specialist work yourself.
+
+Available managed agents:
+
+1. quote_agent
+   Use for historical quote research, preliminary pricing,
+   product support, and quote analysis.
+
+2. inventory_management_agent
+   Use for inventory availability, supplier lead times,
+   replenishment feasibility, available cash, and financial reporting.
+
+3. ordering_agent
+   Use for authoritative order fulfillment or rejection and
+   transaction creation.
+
+Routing rules:
+
+- For a quote-only request, invoke quote_agent.
+- For an inventory, supplier, cash, or financial question, invoke
+  inventory_management_agent.
+- For a complete customer order, invoke quote_agent and
+  inventory_management_agent first.
+- After receiving their findings, invoke ordering_agent for the
+  authoritative fulfillment decision.
+- Give each specialist the complete original customer request.
+- Give ordering_agent the complete original request plus relevant findings
+  from quote_agent and inventory_management_agent.
+
+Authority rules:
+
+- Inventory findings are informational only.
+- The inventory_management_agent must not determine fulfillment status.
+- The Ordering Agent is the authoritative source for fulfillment or rejection.
+- If specialist findings conflict with process_complete_order output,
+  use the process_complete_order result.
+- Do not fulfill an order without invoking ordering_agent.
+- Do not invoke ordering_agent more than once for the same request.
+- Do not remove unsupported products.
+- Do not authorize partial fulfillment.
+- For complete customer orders, base the final response solely on the
+  Ordering Agent result.
+- Do not modify, reinterpret, or override the Ordering Agent outcome.
+- If the Ordering Agent returns fulfilled, report fulfilled.
+- If the Ordering Agent returns rejected, report rejected.
+- Never describe a partial fulfillment.
+
+Date rules:
+
+- Preserve the original request date and required delivery date exactly.
+- Never infer, alter, shorten, or replace a date.
+- Include the exact original request date and required delivery date
+  when invoking ordering_agent.
+
+Final-response rules:
+
+- Do not claim that an agent was invoked unless it was actually invoked.
+- Return one concise customer-facing response.
+- Preserve the Ordering Agent's status, dates, price, discount, and reason.
+- Do not disclose internal errors or sensitive information.
+""",
+)
+
 
 def call_multi_agent_system(request: str) -> str:
     """
-    Coordinate quote research and complete order fulfillment.
+    Submit a customer request to the LLM-based Orchestrator Agent.
+
+    The Orchestrator dynamically selects and invokes the appropriate
+    specialist agents.
 
     Args:
-        request: Customer request containing business context and dates.
+        request: Complete customer request containing business context,
+                 products, quantities, request date, and delivery date.
 
     Returns:
-        Final fulfillment or rejection response.
+        Final customer-facing response from the Orchestrator Agent.
     """
-    quote_response = quote_agent.run(
+    response = orchestrator_agent.run(
         f"""
-Analyze this customer order.
+Analyze and process the following customer request.
 
-Search historical quotes once.
-Estimate every requested item exactly once.
-Do not retry unsupported items.
-Do not provide a partial total when an item is unsupported.
+Dynamically determine which managed specialist agents are required.
+Invoke the relevant agents, use their outputs, and provide the final
+customer-facing response.
+
+For a complete order:
+
+1. Invoke the Quote Agent for product support and preliminary pricing.
+2. Invoke the Inventory Management Agent for stock, supplier, cash,
+   and operational validation.
+3. Invoke the Ordering Agent with the complete original request and
+   relevant findings from the other agents.
+4. Return the final fulfilled or rejected result.
 
 Customer request:
+
 {request}
 """
     )
 
-    order_response = ordering_agent.run(
-        f"""
-Process this complete customer order.
+    return str(response)
 
-Original customer request:
-{request}
-
-Quote-agent analysis:
-{quote_response}
-
-Instructions:
-
-1. Extract every requested item and quantity from the original request.
-2. Extract the request date and required delivery date.
-3. Include all items, including unsupported items.
-4. Call process_complete_order exactly once.
-5. Pass items_json as a valid JSON list in this format:
-
-[
-  {{"customer_item": "A4 printer paper", "quantity": 500}},
-  {{"customer_item": "colored cardstock", "quantity": 200}}
-]
-
-6. Do not retry after the tool returns.
-7. Return the tool's fulfilled or rejected status.
-8. Never claim fulfillment unless the tool returns fulfilled.
-"""
-    )
-
-    return str(order_response)
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 
 def run_test_scenarios():
@@ -1358,7 +1463,9 @@ def run_test_scenarios():
             quote_requests_sample["request_date"], format="%m/%d/%y", errors="coerce"
         )
         quote_requests_sample.dropna(subset=["request_date"], inplace=True)
-        quote_requests_sample = quote_requests_sample.sort_values("request_date")
+        quote_requests_sample = quote_requests_sample.sort_values(
+        "request_date"
+    )
     except Exception as e:
         print(f"FATAL: Error loading test data: {e}")
         return
