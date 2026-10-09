@@ -1,0 +1,143 @@
+MULTI-AGENT BUSINESS OPERATIONS SYSTEM
+Design Notes
+
+Author: Mark Schulze
+
+Overview
+
+This solution uses a multi-agent architecture to automate business operations related to quoting, inventory management, supplier coordination, financial validation, and order fulfillment.
+
+The system was designed to separate responsibilities across specialized agents while maintaining clear business controls and transactional accuracy.
+
+Architecture
+
+The solution consists of two primary agents:
+
+1. Quote Agent
+2. Ordering Agent
+
+Quote Agent Responsibilities
+
+- Searches historical quote records
+- References prior customer requests and quote explanations
+- Estimates pricing for requested products
+- Identifies supported and unsupported products
+- Uses catalog pricing and discount logic
+- Provides preliminary pricing information
+
+Ordering Agent Responsibilities
+
+- Processes complete customer requests
+- Extracts products, quantities, request dates, and delivery dates
+- Validates inventory availability
+- Validates supplier lead times
+- Validates cash availability
+- Creates replenishment transactions when necessary
+- Creates sales transactions
+- Returns fulfilled or rejected order decisions
+
+Business Rules
+
+Inventory Validation
+
+Inventory is evaluated using transaction history rather than static inventory values.
+
+Available inventory is calculated by:
+
+Stock Orders - Sales = Available Inventory
+
+Inventory checks are performed using the required delivery date to account for previously scheduled replenishment and fulfillment transactions.
+
+Supplier Validation
+
+Supplier lead times are determined by requested quantity:
+
+- 10 units or fewer: Same day
+- 11–100 units: 1 day
+- 101–1000 units: 4 days
+- More than 1000 units: 7 days
+
+Orders are rejected when required replenishment cannot arrive before the requested delivery date.
+
+Financial Validation
+
+Before creating replenishment orders, the system validates that sufficient cash exists to cover all required restocking costs.
+
+Orders are rejected when required replenishment exceeds available cash.
+
+Product Resolution
+
+Customers frequently use terminology that differs from catalog product names.
+
+The solution uses a normalization and alias resolution layer to map customer language to catalog products.
+
+Examples:
+
+- "A4 printer paper" → "A4 paper"
+- "standard printer paper" → "Standard copy paper"
+- "colorful cardstock" → "Cardstock"
+- "A4 matte paper" → "Matte paper"
+
+This improves order accuracy and reduces transaction failures.
+
+Discount Logic
+
+Bulk discounts are applied using deterministic thresholds.
+
+Discount Tiers:
+
+- 500+ units: 5%
+- 1000+ units: 10%
+- 5000+ units: 12%
+- 10000+ units: 15%
+
+Order Fulfillment Strategy
+
+Orders are processed as complete transactions.
+
+The system does not partially fulfill orders.
+
+If any item cannot be supported, supplied on time, or financed, the entire order is rejected.
+
+This approach preserves business consistency and prevents incomplete customer deliveries.
+
+Data Sources
+
+The system uses:
+
+- SQLite database
+- Historical quote records
+- Inventory reference data
+- Transaction history
+- Supplier lead-time logic
+
+Technologies
+
+- Python
+- SQLite
+- Pandas
+- SQLAlchemy
+- Smolagents
+- OpenAI-compatible language models
+
+Key Design Decisions
+
+1. Separate quote generation from fulfillment decision-making.
+2. Validate inventory using delivery dates rather than request dates.
+3. Use transaction history as the inventory source of truth.
+4. Reject unsupported products rather than attempting substitutions.
+5. Reject incomplete orders rather than allowing partial fulfillment.
+6. Apply deterministic pricing and discount logic for consistency.
+7. Maintain financial controls before creating replenishment orders.
+
+Results
+
+The final solution successfully demonstrates:
+
+- Multi-agent orchestration
+- Tool-based reasoning
+- Inventory management
+- Financial validation
+- Supplier coordination
+- Transactional order processing
+- Business workflow automation
