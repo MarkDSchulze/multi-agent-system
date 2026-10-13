@@ -1,116 +1,125 @@
 # Multi-Agent Business Operations System
 
-An AI-powered multi-agent system that automates quoting, inventory management, supplier coordination, financial validation, and order fulfillment through specialized agents and business tools.
+A Python multi-agent prototype that coordinates quoting, inventory analysis, supplier timing, financial validation, and customer order processing.
 
 ## Overview
 
-This project demonstrates how multiple AI agents can collaborate to execute end-to-end business operations while maintaining inventory controls, supplier constraints, financial accountability, and transactional integrity.
+A distributor must evaluate pricing, stock availability, delivery timing, and replenishment funding before accepting an order.
 
-The system uses specialized agents that communicate through structured workflows to:
+This project combines specialized AI agents with deterministic business tools to:
 
-- Generate customer quotes
-- Search historical transaction and pricing data
-- Validate inventory availability
-- Evaluate supplier lead times
-- Validate available cash for replenishment
-- Fulfill or reject customer orders
-- Record inventory and sales transactions
-- Generate financial reporting outputs
+- Generate preliminary quotes
+- Retrieve historical quote examples
+- Resolve customer product terminology
+- Validate inventory and supplier timing
+- Check available cash for replenishment
+- Fulfill or reject complete orders
+- Record purchases and sales
+- Generate financial reports and reconcile cash movements
 
 ## Architecture
 
-### Quote Agent
+![System workflow](workflow_diagram.png)
 
-Responsible for:
+| Component | Responsibility |
+|---|---|
+| Orchestrator | Delegates requests to specialist agents and coordinates the workflow |
+| Quote Agent | Searches historical quotes and estimates preliminary item prices |
+| Inventory Management Agent | Checks inventory, supplier timelines, available cash, and financial reports |
+| Ordering Agent | Extracts order details and invokes the authoritative order-processing tool |
 
-- Searching historical quotes
-- Estimating product pricing
-- Identifying supported and unsupported items
-- Providing preliminary quote information
-
-### Ordering Agent
-
-Responsible for:
-
-- Parsing customer requests
-- Inventory validation
-- Supplier timeline validation
-- Financial validation
-- Order fulfillment or rejection
-- Transaction creation
+The `process_complete_order()` tool applies final business rules and records approved transactions. Customer responses are generated directly from its recorded result.
 
 ## Key Features
 
-### Inventory Management
-
-- Real-time inventory availability checks
-- Delivery-date inventory validation
-- Automated replenishment workflows
-- Inventory valuation tracking
-
-### Quote Generation
-
-- Historical quote lookup
-- Item normalization and alias resolution
-- Bulk discount calculations
-- Catalog-based pricing
-
-### Financial Controls
-
-- Cash balance validation
-- Restocking cost calculations
-- Revenue allocation
-- Financial reporting
-
-### Supplier Coordination
-
-- Lead-time calculations
-- Delivery-date validation
-- Automated replenishment decisions
-
-### Order Processing
-
-- Full-order validation
-- Atomic fulfillment decisions
-- Transaction recording
-- Rejection handling for unsupported products or unmet constraints
+- **Quote generation:** Historical retrieval, catalog pricing, product aliases, and quantity discounts
+- **Inventory analysis:** Transaction-based stock calculations and shortage identification
+- **Supplier validation:** Quantity-based lead times checked against delivery deadlines
+- **Financial controls:** Cash checks before replenishment and proportional revenue allocation
+- **Order processing:** Complete-order acceptance or rejection with recorded reasons
+- **Evaluation:** Saved simulation outcomes and cash reconciliation checks
 
 ## Technology Stack
 
 - Python
-- SQLite
-- Pandas
-- SQLAlchemy
 - Smolagents
-- OpenAI-Compatible API
+- OpenAI-compatible API
+- SQLite
+- SQLAlchemy
+- Pandas and NumPy
+- python-dotenv
+
+## Getting Started
+
+Keep the project files in the same directory.
+
+Install dependencies:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+The current implementation uses the course-provided OpenAI-compatible endpoint. Create a local `.env` file containing:
+
+```text
+UDACITY_OPENAI_API_KEY=your_api_key
+```
+
+Do not commit the `.env` file.
+
+Run from the project directory:
+
+```bash
+python multi_agent_system.py
+```
+
+Each run resets `munder_difflin.db` and regenerates the simulation results. Model access requires valid credentials and network connectivity.
 
 ## Project Files
 
 | File | Description |
-|--------|-------------|
-| `multi_agent_system.py` | Complete multi-agent implementation |
-| `test_results.csv` | Test execution results |
+|---|---|
+| `README.md` | Project overview and setup |
+| `multi_agent_system.py` | Agents, tools, database helpers, and simulation |
+| `design_notes.txt` | Architecture, business rules, and design decisions |
 | `workflow_diagram.png` | Workflow visualization |
-| `design_notes.txt` | Design decisions and architecture notes |
+| `quote_requests.csv` | Historical customer requests |
+| `quotes.csv` | Historical quotes paired with those requests |
+| `quote_requests_sample.csv` | Sample requests for the simulation |
+| `test_results.csv` | Recorded simulation outcomes |
+| `requirements.txt` | Python dependencies |
 
-## Results
+Both historical CSVs are required for database initialization.
 
-The system demonstrates:
+## Recorded Results
 
-- Multi-agent orchestration
-- Tool-augmented reasoning
-- Business process automation
-- Inventory state management
-- Supplier coordination
-- Transaction-based accounting
-- Order fulfillment decisioning
+The saved simulation processed 20 requests:
+
+- **8 fulfilled**
+- **5 rejected for unsupported products**
+- **7 rejected because replenishment would miss the delivery deadline**
+
+Results include order status, rejection reasons, transaction indicators, pricing, replenishment costs, and cash movements.
+
+These are recorded simulation outcomes, not an automated test pass rate.
+
+## Limitations
+
+This is a local simulation prototype. Purchases and sales are recorded on the request date; inventory does not model physical shipment and arrival events.
+
+Product attributes and packaging units need further validation. Database-level atomicity, duplicate-order protection, and concurrent processing require additional development.
 
 ## Future Enhancements
 
-- Add demand forecasting and predictive inventory planning.
-- Introduce supplier ranking and dynamic sourcing decisions.
-- Expand agent collaboration with dedicated financial and procurement agents.
-- Add dashboarding and real-time operational analytics.
+- Add automated business-rule and transaction tests
+- Introduce explicit quantity-unit conversions
+- Add demand forecasting and predictive replenishment
+- Extend supplier selection and procurement capabilities
+- Add operational dashboards and structured logging
+
+## Background
+
+Developed during a multi-agent systems course to demonstrate business-oriented agent orchestration and tool-based operational controls.
 
 ## Author
 
